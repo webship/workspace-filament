@@ -1,4 +1,4 @@
-# @webship-js/filament-steps 2.0.0, @webship-js/laravel-steps 2.0.0 and webship-js 2.0.16
+# @webship-js/filament-steps 2.0.0, @webship-js/laravel-steps 2.0.1 and webship-js 2.0.16
 ^"([^"]*)" should be (visible|hidden|attached|focused|enabled|disabled|editable)(?: within (\d+) seconds?)?$
 ^"([^"]*)" should be in the viewport(?: within (\d+) seconds?)?$
 ^"([^"]*)" should be set to "([^"]*)" in row (\d+) of "([^"]*)"$
