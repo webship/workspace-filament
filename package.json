@@ -1,0 +1,96 @@
+{
+  "name": "@webship.co/workspace-filament",
+  "version": "1.0.0",
+  "description": "Filament for Webship Workspace: the builder (`cmd-filament-project.sh`, a new Laravel app with the admin panel installed, or the panel's official demo app) in every sites folder, built on the Laravel plugin, the default accounts, the Filament step pack wired into the testing setup next to the Laravel one, and its AI items in their folders: two agents, a skill, a command and two prompts.",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/webship/workspace-filament.git"
+  },
+  "files": [
+    "dist/src",
+    "ai",
+    "commands",
+    "features",
+    "scripts",
+    "testing",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "workspacePlugin": {
+    "name": "filament",
+    "label": "Filament",
+    "needs": [
+      [
+        "dev",
+        "test",
+        "sandboxes",
+        "demos"
+      ],
+      "laravel",
+      "ai-agents",
+      "ai-skills",
+      "ai-commands",
+      "ai-prompts"
+    ],
+    "commands": {
+      "types": [
+        "sites"
+      ],
+      "workspaces": [
+        "dev",
+        "test",
+        "sandboxes",
+        "demos"
+      ],
+      "files": [
+        "commands/cmd-filament-project.sh"
+      ]
+    },
+    "scripts": {
+      "functions": [
+        "scripts/functions/fun-filament.sh"
+      ],
+      "args": [
+        "scripts/args/arg-filament.sh"
+      ],
+      "machine": [
+        "testing/panel.feature"
+      ]
+    },
+    "ai": {
+      "agents": [
+        "ai/agents/filament-site-builder.md",
+        "ai/agents/filament-tester.md"
+      ],
+      "skills": [
+        "ai/skills/filament-scenarios"
+      ],
+      "commands": [
+        "ai/commands/filament-test.md"
+      ],
+      "prompts": [
+        "ai/prompts/filament-build-and-test.md",
+        "ai/prompts/filament-scenarios-for-a-resource.md"
+      ]
+    },
+    "features": [
+      "features/filament.feature"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@webship.co/workspace-plugin-api": "^1.0.11",
+    "typescript": "^5.9.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
