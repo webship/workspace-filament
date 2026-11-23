@@ -4,7 +4,9 @@
 
 # Installed by the Filament plugin (plugins.sh --install filament); __WORKSPACE__ is the workspace it was installed into.
 #
-# Build a Laravel app with an admin panel in a container, at https://<name>.ddev.site: a new app made by
+# Build a Laravel app with an admin panel in a container, on DDEV (the default) at
+# https://<name>.ddev.site, or with --runtime docker, podman, kubernetes, lando or docksal on that
+# runtime, at the address the build prints: a new app made by
 # the Laravel plugin's builder (the official installer and a starter kit) with the panel installed the
 # documented way (its admin panel at /admin), or with --demo the panel's official demo app (its admin
 # panel at the root of the app). With --install its database is migrated and the workspace account is

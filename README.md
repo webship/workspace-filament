@@ -105,7 +105,10 @@ which accounts the panel lets in, as the panel's documentation shows it for an a
 address verified); the demo app's admin panel checks it with the panel's own middleware on every page;
 a new panel offers the password reset; the app's mail gets a sender address (the password reset mail
 needs one); a new app runs its queue in the request (`QUEUE_CONNECTION=sync`: the panel's password
-reset mail is a queued notification, and a local app runs no queue worker).
+reset mail is a queued notification, and a local app runs no queue worker). The demo app's `.npmrc`
+holds back every npm package younger than seven days (`min-release-age=7`): the builder takes that
+line out, and only that line, and says so, because the testing setup installs step packs younger than
+that, which npm would not find.
 
 The app answers at `https://myapp.ddev.site` (the panel at `/admin`, or at the root of the demo app),
 its mail catcher at `https://myapp.ddev.site:8026`. The builder runs `ddev config

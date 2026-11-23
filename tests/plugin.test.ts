@@ -79,6 +79,8 @@ test('the functions carry the names the core\'s tools look for, use the Laravel 
   assert.doesNotMatch(src, /DB_(HOST|NAME|DATABASE|USER|USERNAME|PASSWORD)=/, 'the container tool owns the database settings');
   assert.doesNotMatch(src, /license|licence key|filamentphp\.com\/(account|login)/i, 'no licence and no account of the vendor');
   assert.doesNotMatch(src, /ddev stop -y/, 'ddev stop takes no -y');
+  assert.doesNotMatch(src.replace(/^\s*#.*$/gm, '').replace(/echo "https:\/\/\$\{PROJECT_NAME\}\.ddev\.site"/, ''), /ddev\.site/, 'ddev.site only as the answer of a core with no layer');
+  assert.doesNotMatch(src.replace(/^\s*#.*$/gm, ''), /(?<![.\w])(docker|podman|kubectl) |command ddev/, 'only `ddev <verb>`: the layer chooses');
 });
 
 test('each agent is a definition the AI Agents folder can list: named after its file, described, on the fable model', () => {

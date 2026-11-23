@@ -9,7 +9,15 @@
 # @webship.co/workspace-laravel. A new app starts from that plugin's laravel_build (the official
 # installer and a starter kit), and the accounts are written with its laravel_write_accounts.
 # Everything runs in the project's container (DDEV by default: `ddev artisan …`, `ddev composer …`),
-# never on the host. The container tool writes the database settings of the app into its .env.
+# never on the host. On DDEV the container tool writes the database settings of the app into its .env.
+#
+# The runtimes: an app is built on DDEV, or with --runtime on Docker Compose, Podman, Kubernetes, Lando
+# or Docksal. The commands are the same on each: `ddev <verb>` is DDEV itself on a DDEV project, and on
+# another runtime the core's layer (fun-runtime.sh) gives the verb its meaning there. What differs comes
+# from the Laravel plugin: Artisan and `.env` (laravel_artisan and laravel_dotenv_set: DDEV has verbs of
+# its own for them, the layer has none), the .env DDEV writes on start (laravel_runtime_config: the
+# address, the database of the project's own stack and its mail catcher), and a new app's build. The
+# address is the runtime's (filament_url), and npm runs in the tests container there.
 #
 # The panel's CLI is Artisan, through the Laravel plugin's tool:
 #   bash cmd-tools-laravel-artisan.sh <app> --run "make:filament-resource Post --generate"
@@ -21,7 +29,9 @@
 #   testing_configure_filament  the step pack in the testing stack  (cmd-tools-testing.sh <project>)
 # An app with a panel is a project of the DDEV type `laravel`: the row's Users menu hands the tools the
 # Laravel plugin's list. The panel's own accounts come with the builder's --add-users, with the testing
-# setup, and with `cmd-tools-add-users.sh <project> filament`.
+# setup, and with `cmd-tools-add-users.sh <project> filament`. On another runtime the builder claims the
+# project (the core's rt_claim: `platform: filament` in the x-webship block, beside the type laravel),
+# so the dashboard knows an app with a panel from a plain Laravel app, and its row hands the panel's list.
 
 # The step pack a panel is tested with, and the release line it is required at. It brings the Laravel
 # step pack along; the Laravel plugin's hook adds that one too.
@@ -48,11 +58,41 @@ function set_filament_users() {
   user_unverified_role='unverified' ;
 }
 
-# Is this folder an app with a panel? A Laravel project (its DDEV project type) with the panel in its
-# Composer packages.
+# The runtime of the project in this folder, or of a new build (--runtime, else the workspace's
+# setting, else DDEV). A core without the runtime layer has DDEV only.
+function filament_runtime() {
+  if declare -f runtime_of > /dev/null ; then runtime_of ; else echo 'ddev' ; fi
+}
+
+# The address of the app in this folder: https://<name>.ddev.site on DDEV, http://127.0.0.1:<port> on
+# Docker Compose, Podman and Lando, the node's address and a port on Kubernetes, http://<name>.docksal.site
+# on Docksal. Asked after `ddev config`.
+function filament_url() {
+  if declare -f rt_url > /dev/null ; then rt_url ; else echo "https://${PROJECT_NAME}.ddev.site" ; fi
+}
+
+# Artisan in the app of this folder, through the Laravel plugin on every runtime; DDEV's own
+# `ddev artisan` with a Laravel plugin from before the runtimes.
+function filament_artisan() {
+  if declare -f laravel_artisan > /dev/null ; then laravel_artisan "$@" ; else ddev artisan "$@" ; fi
+}
+
+# Set keys of a .env file, through the Laravel plugin on every runtime; DDEV's own `ddev dotenv set`
+# with a Laravel plugin from before the runtimes.
+function filament_dotenv_set() {
+  if declare -f laravel_dotenv_set > /dev/null ; then laravel_dotenv_set "$@" ; else ddev dotenv set "$@" ; fi
+}
+
+# Is this folder an app with a panel? A Laravel project (its project type: on DDEV in .ddev/config.yaml,
+# on another runtime in the x-webship block, both read by the core's rt_is_platform) with the panel in
+# its Composer packages.
 function filament_is_project() {
   local project_path="$1";
-  grep -qE '^type:[[:space:]]*"?laravel"?[[:space:]]*$' "${project_path}/.ddev/config.yaml" 2>/dev/null || return 1 ;
+  if declare -f rt_is_platform > /dev/null ; then
+    rt_is_platform "${project_path}" laravel || return 1 ;
+  else
+    grep -qE '^type:[[:space:]]*"?laravel"?[[:space:]]*$' "${project_path}/.ddev/config.yaml" 2>/dev/null || return 1 ;
+  fi
   grep -q '"filament/filament"' "${project_path}/composer.json" 2>/dev/null ;
 }
 
@@ -64,7 +104,7 @@ function filament_enter_project() {
     return 1 ;
   fi
   if ! filament_is_project "${project_path}" ; then
-    echo "${doc_name}/${PROJECT_NAME} is not an app with a panel: a Laravel project (type: laravel) with filament/filament in its composer.json." ;
+    echo "${doc_name}/${PROJECT_NAME} is not an app with a panel: a Laravel project (project type laravel) with filament/filament in its composer.json." ;
     return 1 ;
   fi
   cd "${project_path}" || return 1 ;
@@ -140,19 +180,42 @@ function filament_get_demo() {
   [ -f .env ] || cp .env.example .env ;
 }
 
+# The demo app ships an .npmrc that holds back every npm package younger than seven days (`min-release-age=…`).
+# The testing setup installs step packs younger than that, which npm then cannot find ("ENOVERSIONS"), on every
+# runtime. Only that line is taken out of the app's .npmrc, and the builder says so; the rest of the file stays as
+# it is, and an app with no .npmrc gets none.
+function filament_npmrc_release_age() {
+  local file="${1:-.npmrc}" ;
+  [ -f "${file}" ] || return 0 ;
+  grep -qE '^[[:space:]]*min-release-age[[:space:]]*=' "${file}" || return 0 ;
+  sed -i -E '/^[[:space:]]*min-release-age[[:space:]]*=/d' "${file}" || return 1 ;
+  echo "  .npmrc: the min-release-age line taken out of the app's .npmrc: the testing setup installs step packs younger than seven days." ;
+}
+
 # Build an app with a panel from nothing. With --demo, the panel's official demo app; without it, a new
 # app made by the Laravel plugin's builder (the official installer and a starter kit) with the panel
 # installed the documented way. With --install the database is migrated and the workspace account is
 # the panel's first account; with --add-users the default accounts.
 function filament_build() {
   trim_project_name ;
-  local base_url="https://${PROJECT_NAME}.ddev.site" ;
+  local base_url runtime ;
   local php_version="${PHP_VERSION:-${site_php_version:-8.4}}" ;
   local add_users="${ADD_USERS}" launch="${LAUNCH}" production="${PRODUCTION}" ;
 
   if ! declare -f laravel_build > /dev/null || ! declare -f laravel_write_accounts > /dev/null ; then
     echo "The Filament plugin builds on the Laravel plugin, which is not installed here:" ;
     echo "  bash core/scripts/plugins.sh --install laravel" ;
+    exit 1 ;
+  fi
+  runtime="$(filament_runtime)" ;
+  if [ "${RUNTIME:-_none_}" != '_none_' ] && [ "${RUNTIME}" != "${runtime}" ] ; then
+    echo "--runtime ${RUNTIME} needs a Webship Workspace with the container runtimes (webship/workspace#694): update the workspace, or build on DDEV." ;
+    exit 1 ;
+  fi
+  # On another runtime the app's .env is written by the Laravel plugin, as DDEV writes it on DDEV: one
+  # from before the runtimes would leave the app with no database.
+  if [ "${runtime}" != 'ddev' ] && ! declare -f laravel_runtime_config > /dev/null ; then
+    echo "--runtime ${runtime} needs the Laravel plugin 1.0.2 or later, which builds on the container runtimes: update it, or build on DDEV." ;
     exit 1 ;
   fi
 
@@ -165,16 +228,27 @@ function filament_build() {
     # PHP 8.4: the demo's lock file holds packages that need it.
     ddev config --project-type=laravel --docroot=public --project-name=${PROJECT_NAME} \
       --nodejs-version=$(ddev_nodejs_version) --php-version=${php_version} --auto || exit 1 ;
+    # On another runtime than DDEV the plugin claims the project: its type is the Laravel plugin's.
+    if [ "${runtime}" != 'ddev' ] ; then
+      rt_claim filament || exit 1 ;
+    fi
+    # The address is the runtime's to say, once the project is configured: never a written ddev.site.
+    base_url="$(filament_url)" ;
     filament_get_demo || exit 1 ;
+    filament_npmrc_release_age .npmrc || exit 1 ;
     # The restart writes the database and the mail settings of the container into .env.
     ddev_up start -y || exit 1 ;
+    if [ "${runtime}" != 'ddev' ] ; then
+      # What DDEV's start writes into .env: the address, the database and the mail of the container.
+      laravel_runtime_config "${base_url}" || { echo "The .env of the app could not be written." ; exit 1 ; } ;
+    fi
     ddev composer install --no-interaction --no-progress || { echo "composer install failed." ; exit 1 ; } ;
     ddev composer update 'filament/*' --with-dependencies --no-interaction --no-progress || exit 1 ;
-    ddev artisan key:generate --ansi > /dev/null || exit 1 ;
-    ddev dotenv set .env --mail-from-address=webship@example.com > /dev/null ;
+    filament_artisan key:generate --ansi > /dev/null || exit 1 ;
+    filament_dotenv_set .env --mail-from-address=webship@example.com > /dev/null ;
     if [ "${INSTALL}" == 'yes' ] ; then
-      ddev artisan migrate --force --seed --no-interaction || { echo "The migrations and the demo's seed failed." ; exit 1 ; } ;
-      ddev artisan storage:link > /dev/null ;
+      filament_artisan migrate --force --seed --no-interaction || { echo "The migrations and the demo's seed failed." ; exit 1 ; } ;
+      filament_artisan storage:link > /dev/null ;
     fi
     ddev npm ci --no-audit --no-fund || exit 1 ;
     ddev npm run build || exit 1 ;
@@ -185,17 +259,22 @@ function filament_build() {
     ( laravel_build ) || exit 1 ;
     ADD_USERS="${add_users}" ; LAUNCH="${launch}" ; PRODUCTION="${production}" ;
     cd ${WORKSPACE_ROOT}/${doc_name}/${PROJECT_NAME} || exit 1 ;
+    # On another runtime than DDEV the plugin claims the project the Laravel plugin's builder made.
+    if [ "${runtime}" != 'ddev' ] ; then
+      rt_claim filament || exit 1 ;
+    fi
+    base_url="$(filament_url)" ;
     ddev composer require "filament/filament:^${FILAMENT_LINE}.0" --with-all-dependencies --no-interaction --no-progress \
       || { echo "The panel could not be required." ; exit 1 ; } ;
-    ddev artisan filament:install --panels --no-interaction || { echo "The panel could not be installed." ; exit 1 ; } ;
-    ddev dotenv set .env --mail-from-address=webship@example.com > /dev/null ;
+    filament_artisan filament:install --panels --no-interaction || { echo "The panel could not be installed." ; exit 1 ; } ;
+    filament_dotenv_set .env --mail-from-address=webship@example.com > /dev/null ;
     # The panel's mail (the password reset) is a queued notification, and a new app queues in its
     # database: a local app runs no queue worker, so its queue runs in the request, as the demo's does.
-    ddev dotenv set .env --queue-connection=sync > /dev/null ;
+    filament_dotenv_set .env --queue-connection=sync > /dev/null ;
   fi
 
   filament_set_up_panel || exit 1 ;
-  ddev artisan optimize:clear > /dev/null 2>&1 ;
+  filament_artisan optimize:clear > /dev/null 2>&1 ;
 
   if [ "${INSTALL}" == 'yes' ] ; then
     # The workspace account is the panel's first account, its address verified.
@@ -207,11 +286,11 @@ function filament_build() {
       cd ${WORKSPACE_ROOT}/${doc_name}/${PROJECT_NAME} || exit 1 ;
     fi
     if [ "${PRODUCTION}" == 'yes' ] ; then
-      ddev dotenv set .env --app-env=production --app-debug=false > /dev/null ;
+      filament_dotenv_set .env --app-env=production --app-debug=false > /dev/null ;
     fi
     local panel_path ;
     panel_path="$(filament_panel_path "$(pwd)")" ;
-    echo "${doc_name} ${PROJECT_NAME} has been installed: $(ddev artisan --version 2>/dev/null), panel $(ddev composer show filament/filament 2>/dev/null | awk '$1 == "versions" {print $NF}')$( [ "${DEMO}" == 'yes' ] && echo ', the demo app').";
+    echo "${doc_name} ${PROJECT_NAME} has been installed: $(filament_artisan --version 2>/dev/null), panel $(ddev composer show filament/filament 2>/dev/null | awk '$1 == "versions" {print $NF}')$( [ "${DEMO}" == 'yes' ] && echo ', the demo app').";
     echo "Go to ${base_url}${panel_path%/}/login and log in as ${account_mail}";
   else
     [ "${ADD_USERS}" == 'yes' ] && echo "--add-users needs --install: there is no database to add accounts to yet." ;
@@ -393,7 +472,7 @@ PYEOF
   fi
 
   # The scenarios log in as the default accounts: make sure a migrated app has them.
-  if ddev artisan migrate:status > /dev/null 2>&1 ; then
+  if filament_artisan migrate:status > /dev/null 2>&1 ; then
     ( add_filament_users > /dev/null ) && echo "  the panel's default accounts are on the app (${users[*]})" ;
   fi
 }
