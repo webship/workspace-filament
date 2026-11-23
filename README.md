@@ -77,6 +77,7 @@ Everything the builder runs for an app runs in the app's own container, through 
 | `ai/prompts/filament-build-and-test.md`, `filament-scenarios-for-a-resource.md` | Two prompts: whole launch commands for a new session |
 | `src/index.ts` | `register(api)`: what the assistant is told about Filament here |
 | `features/filament.feature` | Scenarios for the dashboard's own browser suite |
+| `features/filament-runtimes.feature` | The row, the test users and the login page of an app built on Docker Compose and on Kubernetes |
 
 The `workspacePlugin` block in `package.json` is the manifest the installer reads.
 
@@ -98,6 +99,7 @@ bash cmd-filament-project.sh mydemo --install --add-users --demo    # the panel'
 | `--starter-kit <kit>` | Without `--demo`: the starter kit of the new app, `livewire` (the default), `react` or `vue` |
 | `--production` | Run the app as a live app runs (`APP_ENV=production`, `APP_DEBUG=false`): the error pages instead of the debug page |
 | `--php-version <x>` | The PHP of the project container (8.4 by default: the demo app's packages need it) |
+| `--runtime <name>` | The container runtime to build on: `ddev` (the default), `docker`, `kubernetes`, `podman`, `lando` or `docksal`. See [Runtimes](#runtimes) |
 | `--launch` | Open the panel when it is ready |
 
 What the builder changes, each change marked "Webship Workspace" where it is made: the User model says
@@ -110,13 +112,66 @@ holds back every npm package younger than seven days (`min-release-age=7`): the 
 line out, and only that line, and says so, because the testing setup installs step packs younger than
 that, which npm would not find.
 
-The app answers at `https://myapp.ddev.site` (the panel at `/admin`, or at the root of the demo app),
+On DDEV the app answers at `https://myapp.ddev.site` (the panel at `/admin`, or at the root of the demo app),
 its mail catcher at `https://myapp.ddev.site:8026`. The builder runs `ddev config
 --project-type=laravel` with the Node.js of the workspace (24); the container tool writes the database
 settings, the builder writes none. A project of the same name is deleted first.
 
 Nothing paid and no account anywhere: the open-source panel from Packagist and its open-source demo
 app.
+
+
+### Runtimes
+
+```bash
+bash cmd-filament-project.sh mydemo --demo --install --add-users                        # DDEV, the default
+bash cmd-filament-project.sh mydemo --demo --install --add-users --runtime docker       # Docker Compose
+bash cmd-filament-project.sh mydemo --demo --install --add-users --runtime kubernetes   # a Kubernetes cluster
+bash cmd-filament-project.sh mydemo --demo --install --add-users --runtime lando        # Lando
+bash cmd-filament-project.sh mydemo --demo --install --add-users --runtime docksal      # Docksal
+```
+
+Without `--runtime` a build takes `container.runtime` of the workspace's `settings.yml`, then DDEV.
+It needs a Webship Workspace with the container runtimes
+([webship/workspace#694](https://github.com/webship/workspace/issues/694)); on an older one the
+builder refuses `--runtime` and builds on DDEV only. Lando and Docksal need a Workspace whose runtime
+layer has them ([webship/workspace#729](https://github.com/webship/workspace/issues/729),
+[#730](https://github.com/webship/workspace/issues/730)).
+
+| | DDEV | Docker Compose | Kubernetes | Podman | Lando | Docksal |
+| --- | --- | --- | --- | --- | --- | --- |
+| The demo app, built with `--demo --install --add-users` | Yes | Yes | Yes | Not yet run | Yes | Yes |
+| The panel's pages | Yes | Yes | Yes | Not yet run | Yes | Yes |
+| `cmd-tools-laravel-artisan.sh`: status, `--run`, the accounts | Yes | Yes | Yes | Not yet run | Yes | Yes |
+| Test users, added and cancelled | Yes | Yes | Yes | Not yet run | Yes | Yes |
+| Mail caught by Mailpit | Yes | Yes | Yes | Not yet run | Yes | Yes |
+| The testing setup and the first feature | Yes | Yes | Yes | Not yet run | Yes | Yes |
+| The step pack's examples (49 scenarios) | 48 of 49 (*) | 48 of 49 (*) | 48 of 49 (*) | Not yet run | 48 of 49 (*) | 48 of 49 (*) |
+| Export and import the database | Yes | Yes | Yes | Not yet run | Yes | Yes |
+| The row in the dashboard, and remove | Yes | Yes | Yes | Not yet run | Yes | Yes |
+
+"Yes" means it was run on a real app of that runtime. Podman runs the same code as Docker Compose
+and was not run yet. (*) The one scenario is the step pack's own, on every runtime, DDEV included: it
+expects the subject "Reset Password Notification", and the demo of today sends "Reset your password".
+
+| Runtime | The app's address | What the project carries |
+| --- | --- | --- |
+| DDEV | `https://myapp.ddev.site` | `.ddev/config.yaml` |
+| Docker Compose | `http://127.0.0.1:<port>`, printed by the build | `compose.yaml`, `.webship/runtime/Dockerfile` |
+| Kubernetes | `http://<node address>:<port>`, printed by the build | The same, and `k8s/` (the namespace `ws-myapp`) |
+| Lando | `http://127.0.0.1:<port>`, printed by the build | `.lando.yml` (Lando's proxy stays off) |
+| Docksal | `http://myapp.docksal.site`, on Docksal's own proxy | `.docksal/docksal.env`, `.docksal/docksal.yml` |
+
+What differs on Docker Compose, Kubernetes, Lando and Docksal:
+
+- **It needs the Laravel plugin 1.0.2 or later**, which builds on the runtimes: the demo's `.env` gets what DDEV's start writes (the address, `db`/`db`/`db` on the host `db`, the mail catcher), and Artisan and `.env` keys go through that plugin. With an older one a `--runtime` build is refused; on DDEV it builds as before.
+- **The claim:** the project type is `laravel` there too, and the builder also writes `platform: filament` in the `x-webship:` block (the core's `rt_claim`), so the dashboard knows an app with a panel from a plain Laravel app and the row hands the panel's test users.
+- **npm** (the demo's `npm ci` and `npm run build`) runs in the Workspace's tests container: the web container there has no Node.js.
+- **HTTPS and a host name** are DDEV's: a runtime's address is plain HTTP.
+
+The same commands work on every runtime: `cmd-tools-laravel-artisan.sh` (the Laravel plugin's), `cmd-tools-add-users.sh`,
+`cmd-tools-testing.sh`. The pattern is the Workspace's
+[`core/docs/plugins-on-runtimes.md`](https://github.com/webship/workspace/blob/1.0.x/core/docs/plugins-on-runtimes.md).
 
 ### The panel's command line
 
