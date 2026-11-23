@@ -267,3 +267,161 @@ test('the first feature names no platform in a step, and no password', () => {
   for (const step of steps) assert.doesNotMatch(step, /filament|livewire|laravel/i, step);
   assert.doesNotMatch(feature, /password "/);
 });
+
+// ---- The runtimes: DDEV as before, and Docker Compose, Podman, Kubernetes, Lando and Docksal through the core's layer ----
+
+const ADDRESSES: Record<string, string> = {
+  docker: 'http://127.0.0.1:41234', podman: 'http://127.0.0.1:41234', lando: 'http://127.0.0.1:41234',
+  kubernetes: 'http://172.18.0.2:30080', docksal: 'http://site1.docksal.site',
+};
+
+// The Laravel plugin's functions for the runtimes, replaced by recorders that do what it does: DDEV's verbs on
+// DDEV, `php artisan` through exec and the keys written by the plugin on another runtime.
+const LARAVEL_RUNTIMES = `laravel_artisan() { if [ "$(declare -f runtime_of > /dev/null && runtime_of || echo ddev)" == ddev ] ; then ddev artisan "$@" ; else ddev exec php artisan "$@" ; fi ; }
+laravel_dotenv_set() { if [ "$(declare -f runtime_of > /dev/null && runtime_of || echo ddev)" == ddev ] ; then ddev dotenv set "$@" ; else echo "laravel_dotenv_set $*" >> "\${DDEV_LOG:-/dev/null}" ; fi ; }
+laravel_runtime_config() { echo "laravel_runtime_config $*" >> "\${DDEV_LOG:-/dev/null}" ; }`;
+
+/**
+ * The demo build in a throwaway workspace, with `ddev` replaced by a recorder and the core's layer by stand-ins:
+ * `layer` is the runtime it answers with (runtime_of, rt_url), or '' for a core that has no layer yet;
+ * `laravel` is 'runtimes' for a Laravel plugin that builds on the runtimes, 'old' for one from before.
+ */
+function demoBuild(layer: string, laravel: 'runtimes' | 'old', env: Record<string, string> = {}, demo = true) {
+  const p = project('laravel', { demo });
+  const log = path.join(p.root, 'ddev.log');
+  const copy = path.join(p.root, 'demo');
+  fs.cpSync(p.dir, copy, { recursive: true });
+  const address = ADDRESSES[layer] || '';
+  const stand = [
+    layer ? `runtime_of() { echo "\${RUNTIME_ANSWER}" ; } ; rt_url() { [ "\${RUNTIME_ANSWER}" == ddev ] && echo "https://\${PROJECT_NAME}.ddev.site" || echo "${address}" ; } ; rt_claim() { echo "rt_claim $* in $(basename "$PWD")" >> "${log}" ; }` : '',
+    laravel === 'runtimes' ? LARAVEL_RUNTIMES : '',
+  ].join('\n');
+  const r = spawnSync('bash', ['-c', `ddev() { echo "ddev $*" >> "${log}" ; return 0 ; }\ntrim_project_name() { : ; }\ndrop_database() { : ; }\nddev_up() { ddev "$@" ; }\nddev_nodejs_version() { echo 24 ; }\n${LARAVEL}\n${stand}\nsource ${FUNCTIONS}\nfilament_get_demo() { cp -a ${copy}/. ./ ; }\nfilament_build`],
+    { encoding: 'utf8', env: { ...process.env, WORKSPACE_ROOT: p.root, WORKSPACE_SCRIPTS: p.scripts, doc_name: 'dev', PROJECT_NAME: 'site1', DDEV_LOG: log,
+      INSTALL: 'yes', ADD_USERS: 'no', DEMO: demo ? 'yes' : 'no', PRODUCTION: 'no', LAUNCH: 'no', RUNTIME: '_none_', RUNTIME_ANSWER: layer || 'ddev',
+      account_name: 'webmaster', account_mail: 'webmaster@example.com', account_pass: 'a-password-1', ...env } });
+  const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter((c) => /^(ddev|laravel_\w+|rt_claim) /.test(c)) : [];
+  return { r, calls, dir: p.dir };
+}
+
+test('on DDEV the build is what it was: the same commands with the layer and without it, with a Laravel plugin of either age', () => {
+  for (const demo of [true, false]) {
+    const before = demoBuild('', 'old', {}, demo);
+    assert.strictEqual(before.r.status, 0, before.r.stderr + before.r.stdout);
+    for (const b of [demoBuild('ddev', 'old', {}, demo), demoBuild('ddev', 'runtimes', {}, demo), demoBuild('', 'runtimes', {}, demo)]) {
+      assert.strictEqual(b.r.status, 0, b.r.stderr + b.r.stdout);
+      assert.deepStrictEqual(b.calls, before.calls);
+      assert.match(b.r.stdout, /Go to https:\/\/site1\.ddev\.site\/(admin\/)?login and log in as webmaster@example\.com/);
+    }
+    assert.ok(before.calls.some((c) => /^ddev artisan (migrate|filament:install)/.test(c)));
+    assert.ok(!before.calls.some((c) => c.startsWith('laravel_runtime_config') || c.startsWith('rt_claim ')), 'on DDEV nothing is written for the app, and nothing is claimed');
+  }
+});
+
+test('on Docker Compose, Podman, Kubernetes, Lando and Docksal the app gets the .env DDEV would write, and Artisan through exec', () => {
+  for (const runtime of Object.keys(ADDRESSES)) {
+    const address = ADDRESSES[runtime];
+    const b = demoBuild(runtime, 'runtimes', { RUNTIME: runtime });
+    assert.strictEqual(b.r.status, 0, runtime + ': ' + b.r.stderr + b.r.stdout);
+    // The claim right after the project is configured, before it starts.
+    assert.deepStrictEqual(b.calls.slice(0, 3), ['ddev config --project-type=laravel --docroot=public --project-name=site1 --nodejs-version=24 --php-version=8.4 --auto', 'rt_claim filament in site1', 'ddev start -y'], runtime);
+    const at = b.calls.indexOf(`laravel_runtime_config ${address}`);
+    assert.ok(at > b.calls.indexOf('ddev start -y') && at < b.calls.findIndex((c) => c.startsWith('ddev composer install')), `${runtime}: the .env after the start, before the packages`);
+    assert.ok(b.calls.includes('ddev exec php artisan migrate --force --seed --no-interaction'), runtime);
+    assert.ok(b.calls.includes('laravel_dotenv_set .env --mail-from-address=webship@example.com'), runtime);
+    assert.ok(b.calls.includes('ddev npm ci --no-audit --no-fund') && b.calls.includes('ddev npm run build'), `${runtime}: npm in the tests container`);
+    assert.ok(!b.calls.some((c) => /^ddev (artisan|dotenv) /.test(c)), `${runtime}: no verb the layer does not know`);
+    assert.match(b.r.stdout, new RegExp(`Go to ${address.replace(/[.]/g, '\\.')}/login and log in as webmaster@example\\.com`), runtime);
+    assert.doesNotMatch(b.r.stdout, /ddev\.site/, runtime);
+    // A new app: the Laravel plugin's builder makes it, on the same runtime.
+    const n = demoBuild(runtime, 'runtimes', { RUNTIME: runtime }, false);
+    assert.strictEqual(n.r.status, 0, runtime + ': ' + n.r.stderr + n.r.stdout);
+    assert.ok(n.calls.indexOf('rt_claim filament in site1') === n.calls.findIndex((c) => c.startsWith('laravel_build ')) + 1, `${runtime}: the claim on the project the Laravel builder made`);
+    assert.ok(n.calls.includes('ddev exec php artisan filament:install --panels --no-interaction'), runtime);
+    assert.ok(n.calls.includes('laravel_dotenv_set .env --queue-connection=sync'), runtime);
+    assert.match(n.r.stdout, new RegExp(`Go to ${address.replace(/[.]/g, '\\.')}/admin/login`), runtime);
+  }
+});
+
+test('--runtime is refused on a workspace without the runtime layer, and with a Laravel plugin from before the runtimes', () => {
+  const noLayer = demoBuild('', 'runtimes', { RUNTIME: 'docker' });
+  assert.strictEqual(noLayer.r.status, 1);
+  assert.match(noLayer.r.stdout, /--runtime docker needs a Webship Workspace with the container runtimes/);
+  assert.deepStrictEqual(noLayer.calls, []);
+  const oldLaravel = demoBuild('docker', 'old', { RUNTIME: 'docker' });
+  assert.strictEqual(oldLaravel.r.status, 1);
+  assert.match(oldLaravel.r.stdout, /--runtime docker needs the Laravel plugin 1\.0\.2 or later, which builds on the container runtimes/);
+  assert.deepStrictEqual(oldLaravel.calls, [], 'nothing is built');
+});
+
+test('the builder takes --runtime, with the runtimes of the core\'s own builders', () => {
+  const args = fs.readFileSync(path.join(PKG, 'scripts', 'args', 'arg-filament.sh'), 'utf8');
+  assert.match(args, /parser\.add_argument\('--runtime',\s+dest='RUNTIME',\s+default="_none_",\s+choices=\['ddev', 'docker', 'podman', 'kubernetes', 'lando', 'docksal'\],/);
+});
+
+test('an app with a panel is known on every runtime: the layer reads its project type', () => {
+  const p = project('laravel');
+  fs.rmSync(path.join(p.dir, '.ddev'), { recursive: true });
+  fs.writeFileSync(path.join(p.dir, 'compose.yaml'), 'name: site1\nx-webship:\n  runtime: docker\n  type: laravel\n  port: 41234\n');
+  const layer = 'rt_is_platform() { grep -q "^  type: $2$" "$1/compose.yaml" 2>/dev/null ; } ; ';
+  assert.strictEqual(bash(`${layer} filament_is_project ${p.dir}`).status, 0);
+  assert.notStrictEqual(bash(`filament_is_project ${p.dir}`).status, 0, 'an older core reads no compose.yaml');
+  const plain = project('laravel', { panel: false });
+  fs.rmSync(path.join(plain.dir, '.ddev'), { recursive: true });
+  fs.writeFileSync(path.join(plain.dir, 'compose.yaml'), 'name: site1\nx-webship:\n  runtime: docker\n  type: laravel\n');
+  assert.notStrictEqual(bash(`${layer} filament_is_project ${plain.dir}`).status, 0, 'a Laravel app without the panel is not one');
+});
+
+test('the feature of the runtimes drives an app of the platform, and names no platform in a step', () => {
+  const feature = fs.readFileSync(path.join(PKG, 'features', 'filament-runtimes.feature'), 'utf8');
+  const scenarios = feature.split(/\n(?=  @needs-runtime-)/).slice(1);
+  assert.strictEqual(scenarios.length, 6);
+  for (const s of scenarios) assert.match(s, /^  @needs-runtime-(docker|kubernetes) @needs-platform-filament\n  Scenario: /);
+  const steps = feature.split('\n').filter((l) => /^\s*(Given|When|Then|And|But) /.test(l));
+  for (const s of steps) assert.doesNotMatch(s, /filament|laravel|livewire/i, s);
+  assert.strictEqual(scenarios.filter((s) => /I open "\/login" on the/.test(s)).length, 2, 'the login page of either kind of app');
+  assert.doesNotMatch(feature, /ddev\.site|127\.0\.0\.1/);
+  const manifest = JSON.parse(fs.readFileSync(path.join(PKG, 'package.json'), 'utf8')).workspacePlugin;
+  assert.ok(manifest.features.includes('features/filament-runtimes.feature'));
+  assert.match(manifest.featuresSite, /^cmd-filament-project\.sh ci-filament( [A-Za-z0-9._=-]+)* --runtime docker$/);
+});
+
+test('the demo app\'s .npmrc loses only its min-release-age line, and the builder says so; no .npmrc, nothing written', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'filament-npmrc-'));
+  const file = path.join(dir, '.npmrc');
+  fs.writeFileSync(file, 'registry=https://registry.npmjs.org/\nmin-release-age=7\nfund=false\n  min-release-age = 14\n');
+  const r = bash(`cd ${dir} && filament_npmrc_release_age .npmrc`);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), 'registry=https://registry.npmjs.org/\nfund=false\n', 'the other lines are kept as they were');
+  assert.match(r.stdout, /^  \.npmrc: the min-release-age line taken out of the app's \.npmrc: the testing setup installs step packs younger than seven days\.$/m);
+  assert.strictEqual(r.stdout.trim().split('\n').length, 1, 'one line');
+  // Without the line: the file is as it was, and nothing is said.
+  fs.writeFileSync(file, 'fund=false\n');
+  const again = bash(`cd ${dir} && filament_npmrc_release_age .npmrc`);
+  assert.strictEqual(again.status, 0);
+  assert.strictEqual(again.stdout, '');
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), 'fund=false\n');
+  // No .npmrc: none is written.
+  fs.rmSync(file);
+  const none = bash(`cd ${dir} && filament_npmrc_release_age .npmrc`);
+  assert.strictEqual(none.status, 0);
+  assert.strictEqual(none.stdout, '');
+  assert.ok(!fs.existsSync(file), 'no .npmrc is made');
+});
+
+test('the demo build takes the line out on every runtime, DDEV too, after the demo is there', () => {
+  for (const [layer, env] of [['', {}], ['ddev', {}], ['docker', { RUNTIME: 'docker' }], ['kubernetes', { RUNTIME: 'kubernetes' }]] as [string, Record<string, string>][]) {
+    const p = project('laravel');
+    const log = path.join(p.root, 'ddev.log');
+    const copy = path.join(p.root, 'demo');
+    fs.cpSync(p.dir, copy, { recursive: true });
+    fs.writeFileSync(path.join(copy, '.npmrc'), 'min-release-age=7\nfund=false\n');
+    const stand = layer ? `runtime_of() { echo "${layer}" ; } ; rt_url() { echo "http://127.0.0.1:41234" ; } ; rt_claim() { : ; }` : '';
+    const r = spawnSync('bash', ['-c', `ddev() { echo "ddev $*" >> "${log}" ; return 0 ; }\ntrim_project_name() { : ; }\ndrop_database() { : ; }\nddev_up() { ddev "$@" ; }\nddev_nodejs_version() { echo 24 ; }\n${LARAVEL}\n${LARAVEL_RUNTIMES}\n${stand}\nsource ${FUNCTIONS}\nfilament_get_demo() { cp -a ${copy}/. ./ ; }\nfilament_build`],
+      { encoding: 'utf8', env: { ...process.env, WORKSPACE_ROOT: p.root, WORKSPACE_SCRIPTS: p.scripts, doc_name: 'dev', PROJECT_NAME: 'site1', DDEV_LOG: log,
+        INSTALL: 'yes', ADD_USERS: 'no', DEMO: 'yes', PRODUCTION: 'no', LAUNCH: 'no', RUNTIME: '_none_', account_name: 'webmaster', account_mail: 'webmaster@example.com', account_pass: 'a-password-1', ...env } });
+    assert.strictEqual(r.status, 0, (layer || 'no layer') + ': ' + r.stderr + r.stdout);
+    assert.strictEqual(fs.readFileSync(path.join(p.dir, '.npmrc'), 'utf8'), 'fund=false\n', layer || 'no layer');
+    assert.match(r.stdout, /\.npmrc: the min-release-age line taken out/, layer || 'no layer');
+  }
+});

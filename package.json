@@ -82,8 +82,10 @@
       ]
     },
     "features": [
-      "features/filament.feature"
-    ]
+      "features/filament.feature",
+      "features/filament-runtimes.feature"
+    ],
+    "featuresSite": "cmd-filament-project.sh ci-filament --demo --install --add-users --runtime docker"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

@@ -42,10 +42,12 @@ bash cmd-filament-project.sh mydemo --install --add-users --demo    # the panel'
 | `--php-version <x>` | The PHP of the project container (8.4 by default; the demo app needs 8.4 or later). |
 | `--launch` | Opens the panel when it is ready. |
 
-The app answers at `https://<name>.ddev.site` (the panel at `/admin`, or at the root for the demo
+On DDEV the app answers at `https://<name>.ddev.site` (the panel at `/admin`, or at the root for the demo
 app), its mail catcher at `https://<name>.ddev.site:8026`. The builder **deletes a project of the
 same name first**: a build is a clean slate, so never point it at an app somebody still needs. The
 name is a folder, a container project and a host name: short, lowercase, letters and digits.
+
+With `--runtime docker`, `podman`, `kubernetes`, `lando` or `docksal` the app is built on that runtime instead, at the address the build prints (`http://127.0.0.1:<port>`, the node's address and a port, or `http://<name>.docksal.site`): never write a `ddev.site` address for such an app. Its mailbox is at the address `rt_mail_url` gives, and the same commands work on it.
 
 What the builder changes in the app, each change marked "Webship Workspace" where it is made: the User
 model says which accounts the panel lets in (an address verified, as the panel's documentation shows
